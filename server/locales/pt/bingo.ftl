@@ -35,13 +35,19 @@ bingo-repeat-call = Repetir o último número
 bingo-check-called = Ver números sorteados
 bingo-no-calls-yet = Ainda nenhum número foi sorteado.
 bingo-claim-in-progress = Outro pedido de Bingo está sendo verificado agora. Tente novamente em instantes.
+bingo-claim-wait-for-call = Espere o número sendo sorteado ser anunciado, depois tente novamente.
 bingo-checking-claim-you = Você grita Bingo. Verificando sua cartela...
 bingo-checking-claim = { $player } grita Bingo. Verificando a cartela...
 bingo-whose-turn-checking = Verificando a cartela de { $player }...
 bingo-whose-turn-drawing = Sorteando o próximo número...
-bingo-whose-turn-waiting = Próximo número em { $seconds } segundos.
+bingo-whose-turn-waiting = { $seconds ->
+    [one] Próximo número em { $seconds } segundo.
+   *[other] Próximo número em { $seconds } segundos.
+}
 bingo-claim-incorrect-you = Cartela incorreta.
 bingo-claim-incorrect = A cartela de { $player } está incorreta.
+bingo-claim-incomplete-you = Você ainda não tem o padrão completo.
+bingo-claim-incomplete = { $player } ainda não tem o padrão completo.
 bingo-marked-number-not-called = Você marcou { $letter } { $number }, mas esse número ainda não foi sorteado.
 
 bingo-last-call = { $letter } { $number }
@@ -49,7 +55,7 @@ bingo-last-call = { $letter } { $number }
 bingo-status-called-count = { $count } de { $total } números sorteados.
 bingo-status-called-entry = { $letter } { $number }
 
-bingo-game-start = O Bingo começa! Padrão: { $pattern }. Um novo número será sorteado a cada { $interval } segundos. Marque sua cartela e pressione B quando fizer Bingo.
+bingo-game-start = O Bingo começa! Padrão: { $pattern }. Um novo número será sorteado a cada { $interval } segundos. Marque sua cartela e grite Bingo quando fizer Bingo.
 bingo-number-called = { $letter } { $number }
 
 bingo-claim-correct-you = Sim! Cartela correta. Você vence com { $numbers }!
@@ -61,6 +67,9 @@ bingo-deck-exhausted = Todos os 75 números foram sorteados. A rodada termina aq
 bingo-error-invalid-interval = "{ $value }" não é um intervalo de sorteio válido.
 bingo-error-invalid-pattern = { $value } não é um padrão para vencer reconhecido.
 
-bingo-end-calls = { $count } números foram sorteados nesta rodada.
+bingo-end-calls = { $count ->
+    [one] { $count } número foi sorteado nesta rodada.
+   *[other] { $count } números foram sorteados nesta rodada.
+}
 bingo-end-winner-line = Vencedor: { $player }
-bingo-end-no-winner = Nenhum jogador completou o padrão.
+bingo-end-no-winner = Nenhum pedido de Bingo válido foi feito nesta rodada.

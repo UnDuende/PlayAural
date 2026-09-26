@@ -3,15 +3,18 @@
 import random
 from pathlib import Path
 
+from ..core.server import Server
+from ..game_utils.actions import Visibility
+from ..game_utils.grid_mixin import grid_cell_id
 from ..games.bingo.game import (
     CALL_SEQUENCE_TAG,
     CALL_SPIN_DELAY_TICKS,
     CARD_COLS,
     CARD_ROWS,
+    CLAIM_RESULT_SOUND_DELAY_TICKS,
     CLAIM_SEQUENCE_TAG,
     COLUMN_LETTERS,
     COLUMN_RANGES,
-    ERROR_SOUND_SEQUENCE_TAG,
     FREE_COL,
     FREE_ROW,
     FREE_VALUE,
@@ -19,9 +22,10 @@ from ..games.bingo.game import (
     PATTERN_FOUR_CORNERS,
     PATTERN_LETTER_X,
     PATTERN_LINE,
+    SOUND_ERROR,
+    SOUND_WIN,
     TICKS_PER_SECOND,
     TOTAL_BALLS,
-    WIN_SOUND_SEQUENCE_TAG,
     BingoGame,
     BingoOptions,
     BingoPlayer,
@@ -311,7 +315,10 @@ def test_win_sound_is_delayed_a_second_after_the_announcement() -> None:
     assert game.status == "finished"
     listener_user = game.get_user(listener)
     assert "game_bingo/win.ogg" not in listener_user.get_sounds_played()
-    assert game.has_active_sequence(tag=WIN_SOUND_SEQUENCE_TAG)
+    # Scheduled via GameSoundMixin.schedule_sound, deliberately not a
+    # SequenceRunnerMixin sequence -- see test_win_sound_survives_a_real_
+    # table_reset below for why that distinction matters.
+    assert any(entry[1] == SOUND_WIN for entry in game.scheduled_sounds)
 
     for _ in range(TICKS_PER_SECOND - 1):
         game.on_tick()
@@ -320,6 +327,39 @@ def test_win_sound_is_delayed_a_second_after_the_announcement() -> None:
     assert advance_until(
         game, lambda: "game_bingo/win.ogg" in listener_user.get_sounds_played()
     )
+
+
+def test_winning_numbers_are_rendered_through_localization_per_entry(monkeypatch) -> None:
+    """Regression for the dev's second-round point 4: _declare_winner
+    used to build each entry with a hardcoded f"{letter} {number}",
+    with only the surrounding conjunction actually localized. Each
+    number now has to go through Localization.get("bingo-status-called-
+    entry", ...) individually, once per recipient locale, rather than
+    being formatted once up front in whatever shape English happens to
+    use."""
+    game = make_game(player_count=2, pattern=PATTERN_LINE, start=True)
+    winner, listener = game.players
+    _force_line_win(game, winner)
+    expected_numbers = {
+        winner.card[0][c] for c in range(CARD_COLS) if not (0 == FREE_ROW and c == FREE_COL)
+    }
+
+    seen_calls = []
+    real_get = Localization.get.__func__
+
+    def spy_get(cls, locale, message_id, **kwargs):
+        if message_id == "bingo-status-called-entry":
+            seen_calls.append((locale, kwargs.get("number")))
+        return real_get(cls, locale, message_id, **kwargs)
+
+    monkeypatch.setattr(Localization, "get", classmethod(spy_get))
+
+    game._action_claim_bingo(winner, "claim_bingo")
+    _resolve_claim(game)
+
+    called_numbers = {number for _locale, number in seen_calls}
+    assert called_numbers == expected_numbers
+    assert all(locale == "en" for locale, _number in seen_calls)
 
 
 def test_blackout_win_does_not_read_out_every_number() -> None:
@@ -372,7 +412,7 @@ def test_error_buzzer_is_delayed_a_second_after_the_announcement() -> None:
 
     listener_user = game.get_user(listener)
     assert "game_bingo/error.ogg" not in listener_user.get_sounds_played()
-    assert game.has_active_sequence(tag=ERROR_SOUND_SEQUENCE_TAG)
+    assert any(entry[1] == SOUND_ERROR for entry in game.scheduled_sounds)
 
     for _ in range(TICKS_PER_SECOND - 1):
         game.on_tick()
@@ -380,6 +420,54 @@ def test_error_buzzer_is_delayed_a_second_after_the_announcement() -> None:
 
     assert advance_until(
         game, lambda: "game_bingo/error.ogg" in listener_user.get_sounds_played()
+    )
+
+
+def test_win_sound_survives_a_real_table_reset() -> None:
+    """Regression for the dev's second-round point 3: the old
+    implementation started a trailing WIN_SOUND_SEQUENCE_TAG sequence,
+    which Table.reset_game() cancels along with every other sequence on
+    the old game instance the moment finish_game() installs a fresh one
+    -- so the delayed cue never played in production, even though a test
+    that kept ticking the discarded game object directly looked green.
+    This goes through a real Table so that boundary is actually
+    exercised, not simulated."""
+    alice = MockUser("Player1", uuid="p1")
+    bob = MockUser("Player2", uuid="p2")
+    server = Server(db_path=":memory:")
+    server._db.connect()
+    server._users = {alice.username: alice, bob.username: bob}
+
+    table = server._tables.create_table("bingo", alice.username, alice)
+    game = BingoGame(options=BingoOptions(pattern=PATTERN_LINE))
+    table.game = game
+    game._table = table
+    server._set_in_game_state(alice, table.table_id)
+    game.initialize_lobby(alice.username, alice)
+    table.add_member(bob.username, bob)
+    game.add_player(bob.username, bob)
+    server._set_in_game_state(bob, table.table_id)
+    game.on_start()
+
+    winner, listener = game.players
+    _force_line_win(game, winner)
+
+    game._action_claim_bingo(winner, "claim_bingo")
+    _resolve_claim(game)
+    assert game.status == "finished"
+
+    # The real lifecycle: the table (not the test) decides when to reset,
+    # installing a brand-new game instance and cancelling every sequence
+    # on the old one -- unlike the old test, nothing here keeps ticking
+    # the discarded `game` object afterward.
+    table.reset_game()
+    new_game: BingoGame = table.game
+    assert new_game is not game
+
+    listener_user = new_game.get_user(listener)
+    assert "game_bingo/win.ogg" not in listener_user.get_sounds_played()
+    assert advance_until(
+        new_game, lambda: "game_bingo/win.ogg" in listener_user.get_sounds_played()
     )
 
 
@@ -410,6 +498,44 @@ def test_claim_names_the_specific_marked_but_uncalled_number() -> None:
     assert any(str(uncalled_value) in m for m in spoken)
 
 
+def test_incomplete_pattern_and_uncalled_number_get_different_messages() -> None:
+    """Regression for the dev's second-round point 4: a claim can fail
+    for two very different reasons -- the pattern just isn't there yet,
+    or it's there but one of the marks is ahead of the actual calls --
+    and a single generic "Incorrect card." doesn't tell the player which
+    one happened or what to do about it."""
+    incomplete_game = make_game(player_count=2, pattern=PATTERN_LINE, start=True)
+    empty_handed = incomplete_game.players[0]
+    incomplete_game._action_claim_bingo(empty_handed, "claim_bingo")
+    _resolve_claim(incomplete_game)
+    incomplete_spoken = incomplete_game.get_user(empty_handed).get_spoken_messages()
+    assert any(
+        Localization.get("en", "bingo-claim-incomplete-you") in m for m in incomplete_spoken
+    )
+    assert not any(
+        Localization.get("en", "bingo-claim-incorrect-you") in m for m in incomplete_spoken
+    )
+
+    uncalled_game = make_game(player_count=2, pattern=PATTERN_LINE, start=True)
+    ahead_of_calls = uncalled_game.players[0]
+    row = 0
+    for col in range(CARD_COLS):
+        ahead_of_calls.marked[row][col] = True
+        value = ahead_of_calls.card[row][col]
+        if col < CARD_COLS - 1 and value != FREE_VALUE:
+            uncalled_game.called_numbers.append(value)
+
+    uncalled_game._action_claim_bingo(ahead_of_calls, "claim_bingo")
+    _resolve_claim(uncalled_game)
+    uncalled_spoken = uncalled_game.get_user(ahead_of_calls).get_spoken_messages()
+    assert any(
+        Localization.get("en", "bingo-claim-incorrect-you") in m for m in uncalled_spoken
+    )
+    assert not any(
+        Localization.get("en", "bingo-claim-incomplete-you") in m for m in uncalled_spoken
+    )
+
+
 def test_second_claim_is_rejected_while_one_is_being_checked() -> None:
     game = make_game(player_count=2, pattern=PATTERN_LINE, start=True)
     first, second = game.players[0], game.players[1]
@@ -427,6 +553,56 @@ def test_second_claim_is_rejected_while_one_is_being_checked() -> None:
     _resolve_claim(game)
     assert first.has_bingo is True
     assert second.has_bingo is False
+
+
+def test_claim_is_rejected_while_a_number_is_mid_call() -> None:
+    """Regression for the dev's second-round point 1: CALL_SEQUENCE_TAG
+    has no lock_scope of its own, so it keeps advancing on its own
+    schedule regardless of any lock a claim sequence holds --
+    process_sequences() advances every active sequence, lock or no lock.
+    A claim started while a call is mid-flight (drawn but not yet
+    announced) could have its own suspense beat overlap the instant that
+    number gets announced, flipping the claim's validity mid-
+    verification. The dev reproduced exactly this: mark a row whose
+    numbers are all called except one, let the call for that last number
+    start, then submit the claim before it's announced."""
+    game = make_game(player_count=2, pattern=PATTERN_LINE, start=True)
+    player = game.players[0]
+    row = 0
+    for col in range(CARD_COLS):
+        player.marked[row][col] = True
+    missing_value = next(
+        v for v in (player.card[row][c] for c in range(CARD_COLS)) if v != FREE_VALUE
+    )
+    for col in range(CARD_COLS):
+        value = player.card[row][col]
+        if value != FREE_VALUE and value != missing_value:
+            game.called_numbers.append(value)
+
+    # The full row is marked, but missing_value -- one of its numbers --
+    # hasn't been called yet. Start its call (the "spin") without
+    # announcing it, exactly the mid-flight state from the dev's repro.
+    game.available_numbers = [missing_value]
+    game._start_next_call()
+    assert game.pending_call_number == missing_value
+
+    for _ in range(10):
+        game.on_tick()
+    assert game.pending_call_number == missing_value  # still spinning
+
+    assert game._is_claim_enabled(player) == "bingo-claim-wait-for-call"
+    game._action_claim_bingo(player, "claim_bingo")
+    assert game.pending_claim_player_id is None  # rejected outright, no sequence started
+    assert player.has_bingo is False
+
+    # Once the number is actually announced, the identical claim is
+    # legitimately valid -- this isn't blocking claims that should win,
+    # only ones submitted before the board they're checked against is
+    # final.
+    _force_announce(game, missing_value)
+    game._action_claim_bingo(player, "claim_bingo")
+    _resolve_claim(game)
+    assert player.has_bingo is True
 
 
 def test_bot_stays_quiet_when_called_number_is_not_on_its_board() -> None:
@@ -674,34 +850,52 @@ def test_deck_exhaustion_with_a_pending_claim_still_resolves_it() -> None:
     assert game.status == "finished"
 
 
-def test_touch_turn_menu_puts_claim_bingo_before_the_grid() -> None:
-    """claim_bingo lives in the turn action set, not the standard one --
-    _order_touch_standard_actions can only reorder IDs already on the
-    set it's given, so listing claim_bingo there (as this used to) was
-    a silent no-op. The real fix reorders create_turn_action_set
-    itself, putting the time-critical reaction control first for touch
-    clients rather than after all 25 grid cells."""
+def _grid_cell_order(action_set) -> list[str]:
+    return [action_id for action_id in action_set._order if action_id.startswith("grid_cell_")]
+
+
+def test_touch_turn_menu_keeps_the_grid_contiguous_and_aligned() -> None:
+    """Regression for the dev's second-round point 2: an earlier fix
+    moved claim_bingo to index 0 for touch clients, shifting every one
+    of the 25 grid cells over by one and pushing the last cell into a
+    phantom sixth row -- since the client derives (row, col) from the
+    flat _order index plus grid_width, that desynced the visible board
+    from its logical coordinates on touch. The 25 cells must occupy flat
+    indices 0..24 in exact row-major order on every client, touch
+    included, for GridGameMixin's math to stay correct."""
     game = make_game(player_count=2, start=True)
     player = game.players[0]
     user = game.get_user(player)
     user.client_type = "mobile"
 
     action_set = game.create_turn_action_set(player)
-    assert action_set._order[0] == "claim_bingo"
-    assert len(action_set._order) > 1
+    expected = [grid_cell_id(row, col) for row in range(CARD_ROWS) for col in range(CARD_COLS)]
+    assert action_set._order[: len(expected)] == expected
 
 
-def test_desktop_turn_menu_is_unaffected_by_touch_ordering() -> None:
-    game = make_game(player_count=2, start=True)
-    player = game.players[0]
-    action_set = game.create_turn_action_set(player)
-    assert action_set._order[0] != "claim_bingo"
+def test_claim_bingo_lands_right_after_the_grid_on_every_client() -> None:
+    """Claim doesn't need to be first to be "quickly reachable" -- it
+    just can't corrupt the board to get there. Sitting immediately after
+    the 25th cell (rather than buried behind the whole standard menu)
+    is one step away on every client, desktop and touch alike."""
+    for client_type in (None, "mobile"):
+        game = make_game(player_count=2, start=True)
+        player = game.players[0]
+        game.get_user(player).client_type = client_type
+        action_set = game.create_turn_action_set(player)
+        grid_cells = _grid_cell_order(action_set)
+        assert len(grid_cells) == CARD_ROWS * CARD_COLS
+        claim_index = action_set._order.index("claim_bingo")
+        assert claim_index > action_set._order.index(grid_cells[-1])
 
 
-def test_touch_standard_actions_follow_touch_order() -> None:
+def test_touch_standard_actions_follow_touch_order_and_are_visible() -> None:
     """claim_bingo doesn't belong to this action set at all (see
-    create_turn_action_set), and whose_turn -- Bingo's repurposed T
-    keybind -- must actually be reachable in the touch order too."""
+    create_turn_action_set). whose_turn and whos_at_table are keybind-
+    only/hidden by default in the base implementation -- reordering them
+    into the touch menu is a no-op unless their visibility is also
+    overridden for touch clients, which is the actual second half of
+    this fix."""
     game = make_game(player_count=2, start=True)
     player = game.players[0]
     user = game.get_user(player)
@@ -713,6 +907,46 @@ def test_touch_standard_actions_follow_touch_order() -> None:
     assert order.index("repeat_call") < order.index("check_called")
     assert order.index("check_called") < order.index("whose_turn")
     assert order.index("whose_turn") < order.index("whos_at_table")
+
+    assert game._is_whose_turn_hidden(player) == Visibility.VISIBLE
+    assert game._is_whos_at_table_hidden(player) == Visibility.VISIBLE
+
+
+def test_desktop_standard_actions_keep_base_visibility() -> None:
+    """The touch-only visibility override must not leak onto desktop --
+    whose_turn/whos_at_table stay keybind-only there, matching every
+    other game's base behavior."""
+    game = make_game(player_count=2, start=True)
+    player = game.players[0]
+    assert game._is_whose_turn_hidden(player) == Visibility.HIDDEN
+    assert game._is_whos_at_table_hidden(player) == Visibility.HIDDEN
+
+
+def test_before_menu_build_resyncs_standard_order_on_device_handover() -> None:
+    """Regression for the dev's note that the touch reordering wasn't
+    idempotent: it only ran once, at action-set creation time, so a
+    desktop<->mobile handover mid-game left the standard menu stuck with
+    whichever device built it first. before_menu_build must re-apply the
+    ordering on every menu build instead."""
+    game = make_game(player_count=2, start=True)
+    player = game.players[0]
+    user = game.get_user(player)
+
+    # setup_player_actions() already built and attached this player's
+    # "standard" set at add_player() time, with whatever client_type the
+    # user had then -- desktop, by default.
+    desktop_order = list(game.get_action_set(player, "standard")._order)
+
+    user.client_type = "mobile"
+    game.before_menu_build(player)
+    order = game.get_action_set(player, "standard")._order
+    assert order != desktop_order
+    assert order.index("repeat_call") < order.index("whos_at_table")
+
+    user.client_type = None
+    game.before_menu_build(player)
+    order = game.get_action_set(player, "standard")._order
+    assert order == desktop_order
 
 
 def test_marking_is_locked_while_a_claim_is_being_checked() -> None:

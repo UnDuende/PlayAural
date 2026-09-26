@@ -117,12 +117,16 @@ CLAIM_SEQUENCE_TAG = "bingo_claim"
 
 # The cymbal/reveal fire the instant the claim resolves (see
 # _handle_resolve_claim), but the follow-up win or buzzer sound still
-# lands a beat later rather than right on top of that -- now its own
-# short trailing sequence instead of a free-running tick counter, so it
-# keeps ticking even after finish_game() has already ended the round.
+# lands a beat later rather than right on top of that. This is
+# deliberately a schedule_sound() entry, NOT a SequenceRunnerMixin
+# sequence: Table.reset_game() calls cancel_all_sequences() on the old
+# game instance the moment finish_game() installs a fresh one, which
+# would silently swallow a sequence-based delay before its second beat
+# ever ran. scheduled_sounds is the one piece of in-flight game state
+# reset_game() explicitly copies onto the new instance for the normal
+# game-over flow (preserve_scheduled_sounds=True), so this cue survives
+# exactly the boundary a trailing sequence would not.
 CLAIM_RESULT_SOUND_DELAY_TICKS = TICKS_PER_SECOND
-WIN_SOUND_SEQUENCE_TAG = "bingo_win_sound"
-ERROR_SOUND_SEQUENCE_TAG = "bingo_error_sound"
 
 STATUS_RECENT_CALLS_SHOWN = 10
 
@@ -427,18 +431,18 @@ class BingoGame(GridGameMixin, Game):
             )
         )
 
-        # claim_bingo lives in THIS action set, not the standard one, so
-        # _order_touch_standard_actions (called from
-        # create_standard_action_set below) can never reach it -- that
-        # helper only reorders IDs already registered on the set it's
-        # given. Time-critical reaction controls belong first in a touch
-        # turn menu, ahead of the 25 grid cells, so it's reachable
-        # without paging through the whole board.
-        user = self.get_user(player)
-        if self.is_touch_client(user):
-            action_set._order = ["claim_bingo"] + [
-                action_id for action_id in action_set._order if action_id != "claim_bingo"
-            ]
+        # claim_bingo deliberately stays LAST in this set's natural add
+        # order (grid cells, then the hidden nav actions, then this),
+        # on every client including touch. The 25 grid cells must occupy
+        # flat indices 0..24 in exact row-major order for the client's
+        # grid_height/grid_width math (see GridGameMixin) to line up
+        # visual position with logical (row, col) -- an earlier attempt
+        # to move claim_bingo to index 0 for touch shifted every cell by
+        # one and pushed the last cell into a phantom sixth row, so
+        # desktop, Web, and touch all navigated a board whose logical
+        # coordinates no longer matched what was on screen. Landing
+        # immediately after the 25th cell keeps Claim one step away
+        # rather than requiring a trip through the whole standard menu.
         return action_set
 
     def create_standard_action_set(self, player: Player) -> ActionSet:
@@ -466,23 +470,50 @@ class BingoGame(GridGameMixin, Game):
             )
         )
 
+        self._apply_standard_touch_order(action_set, self.get_user(player))
+        return action_set
+
+    _STANDARD_TOUCH_ORDER = [
+        "repeat_call",
+        "check_called",
+        "check_scores",
+        "whose_turn",
+        "whos_at_table",
+    ]
+
+    def _apply_standard_touch_order(self, action_set: ActionSet, user) -> None:
+        """claim_bingo belongs to the turn action set, not this one (see
+        create_turn_action_set) -- listing it here would be a no-op,
+        since this can only reorder IDs that already exist on the set
+        it's given."""
+        if self.is_touch_client(user):
+            self._order_touch_standard_actions(action_set, self._STANDARD_TOUCH_ORDER)
+
+    def before_menu_build(self, player: Player) -> None:
+        """Rebuild the standard action set from scratch on every menu
+        build, not just once at action-set creation time. Reordering the
+        existing set in place only knows how to move things INTO touch
+        order, never back out of it, so a mobile->desktop handover mid-
+        game would leave the menu stuck with whatever touch ordering was
+        already applied. Rebuilding is a pure function of the player's
+        current client type and game state either way, so it's
+        idempotent regardless of which direction the handover goes."""
+        if self.get_action_set(player, "standard") is None:
+            return
+        self.remove_action_set(player, "standard")
+        self.add_action_set(player, self.create_standard_action_set(player))
+
+    def _is_whose_turn_hidden(self, player: Player) -> Visibility:
+        user = self.get_user(player)
+        if self.is_touch_client(user) and self.status == "playing":
+            return Visibility.VISIBLE
+        return super()._is_whose_turn_hidden(player)
+
+    def _is_whos_at_table_hidden(self, player: Player) -> Visibility:
         user = self.get_user(player)
         if self.is_touch_client(user):
-            # claim_bingo belongs to the turn action set, not this one
-            # (see create_turn_action_set) -- listing it here was a
-            # no-op, since this helper can only reorder IDs that already
-            # exist on the set it's given.
-            self._order_touch_standard_actions(
-                action_set,
-                [
-                    "repeat_call",
-                    "check_called",
-                    "check_scores",
-                    "whose_turn",
-                    "whos_at_table",
-                ],
-            )
-        return action_set
+            return Visibility.VISIBLE
+        return super()._is_whos_at_table_hidden(player)
 
     def _is_claim_enabled(self, player: Player) -> str | None:
         if self.status != "playing":
@@ -493,6 +524,24 @@ class BingoGame(GridGameMixin, Game):
             return "bingo-you-already-won"
         if self.is_sequence_gameplay_locked():
             return "bingo-claim-in-progress"
+        if self.pending_call_number is not None:
+            # A drawn number's spin sound is already playing but hasn't
+            # been announced yet (see _start_next_call/_handle_announce_
+            # call). That CALL_SEQUENCE_TAG sequence has no lock_scope of
+            # its own and keeps advancing regardless of any lock a claim
+            # sequence holds -- process_sequences() advances every active
+            # sequence on its own schedule, lock or no lock. So a claim
+            # started while a call is mid-flight could still have its
+            # suspense beat overlap the moment the number gets announced,
+            # changing the claim from invalid to valid (or the reverse)
+            # while it's being checked. Rejecting the claim here, before
+            # its own sequence ever starts, means the two are never
+            # in flight at the same time in either order: this can only
+            # return non-None while pending_call_number is set, and the
+            # gameplay lock this claim's own sequence takes already
+            # blocks on_tick from starting a NEW call for as long as the
+            # claim itself is being verified.
+            return "bingo-claim-wait-for-call"
         return None
 
     def _is_claim_hidden(self, player: Player) -> Visibility:
@@ -782,13 +831,19 @@ class BingoGame(GridGameMixin, Game):
         super().on_tick()
         self.process_scheduled_sounds()
 
-        # Sequences have to be processed even once the round has
-        # finished (status is no longer "playing"): a winning claim's
-        # trailing win-sound sequence is started by _handle_resolve_claim
-        # and then finish_game() runs in that same call, so gating this
-        # on "playing" like everything below would mean that sound (or
-        # an error buzzer for a claim that resolved right as the deck
-        # ran out) could never actually fire.
+        # process_scheduled_sounds() above already runs unconditionally,
+        # which is what lets the delayed win/error cue (see
+        # _handle_resolve_claim) still fire after finish_game() -- and
+        # survive a real Table.reset_game() -- since scheduled_sounds is
+        # plain data the table explicitly carries onto the fresh game
+        # instance, not a SequenceRunnerMixin sequence that instance's
+        # own reset would cancel. process_sequences() itself is kept
+        # unconditional too, defensively: CALL_SEQUENCE_TAG and
+        # CLAIM_SEQUENCE_TAG both self-cancel the instant their last beat
+        # runs, so neither is ever left active once the round ends, but
+        # gating this call on "playing" would silently strand any future
+        # sequence someone adds that's still ticking down at that exact
+        # moment.
         self.process_sequences()
 
         if self.status != "playing":
@@ -987,24 +1042,29 @@ class BingoGame(GridGameMixin, Game):
         self.play_sound(SOUND_CYMBAL)
 
         if is_valid:
+            # This has to be scheduled BEFORE _declare_winner(), not after:
+            # _declare_winner() calls finish_game(), and finish_game()
+            # itself calls self._table.reset_game() synchronously, right
+            # then and there, whenever any human remains at the table --
+            # it isn't a delayed/timer-driven handoff. Scheduling the
+            # sound after that call would queue it on the OLD game
+            # instance a moment after reset_game() already read that
+            # instance's (till-then-empty) scheduled_sounds to hand off
+            # to the fresh one, so the entry would exist but on an
+            # instance nothing keeps ticking anymore.
+            self.schedule_sound(SOUND_WIN, delay_ticks=CLAIM_RESULT_SOUND_DELAY_TICKS)
             self._declare_winner(player, winning_numbers or [])
-            self.start_sequence(
-                WIN_SOUND_SEQUENCE_TAG,
-                [
-                    SequenceBeat.pause(CLAIM_RESULT_SOUND_DELAY_TICKS),
-                    SequenceBeat(ops=[SequenceOperation.sound_op(SOUND_WIN)]),
-                ],
-                tag=WIN_SOUND_SEQUENCE_TAG,
-            )
         else:
-            self.broadcast_personal_l(
-                player, "bingo-claim-incorrect-you", "bingo-claim-incorrect", buffer="game"
-            )
             if bad_number is not None:
                 # They had a complete shape marked, but one of those
-                # marks was ahead of the actual calls -- tell them
-                # specifically which one, privately (nobody else needs
-                # to hear the details of their card).
+                # marks was ahead of the actual calls. This is a
+                # different failure from an incomplete pattern -- say so
+                # specifically, then tell them privately which number it
+                # was (nobody else needs to hear the details of their
+                # card).
+                self.broadcast_personal_l(
+                    player, "bingo-claim-incorrect-you", "bingo-claim-incorrect", buffer="game"
+                )
                 user = self.get_user(player)
                 if user:
                     col = self._column_for_number(bad_number)
@@ -1014,14 +1074,11 @@ class BingoGame(GridGameMixin, Game):
                         letter=COLUMN_LETTERS[col],
                         number=bad_number,
                     )
-            self.start_sequence(
-                ERROR_SOUND_SEQUENCE_TAG,
-                [
-                    SequenceBeat.pause(CLAIM_RESULT_SOUND_DELAY_TICKS),
-                    SequenceBeat(ops=[SequenceOperation.sound_op(SOUND_ERROR)]),
-                ],
-                tag=ERROR_SOUND_SEQUENCE_TAG,
-            )
+            else:
+                self.broadcast_personal_l(
+                    player, "bingo-claim-incomplete-you", "bingo-claim-incomplete", buffer="game"
+                )
+            self.schedule_sound(SOUND_ERROR, delay_ticks=CLAIM_RESULT_SOUND_DELAY_TICKS)
             self.refresh_menus()
 
     def on_sequence_callback(
@@ -1037,10 +1094,12 @@ class BingoGame(GridGameMixin, Game):
         self.winner_ids.append(player.id)
         # The cymbal (played by the caller, right before this) still
         # lands exactly on the spoken reveal below -- that part is
-        # unchanged. The victory sound itself is a short trailing
-        # sequence started by the caller (see _handle_resolve_claim),
-        # delayed a beat after this instant instead of playing on top
-        # of everything else at once.
+        # unchanged. The victory sound itself is scheduled by the caller
+        # (see _handle_resolve_claim) to land a beat after this instant
+        # instead of playing on top of everything else at once, and to
+        # keep playing on schedule even if this round's finish_game()
+        # call (below) leads to the game instance being replaced before
+        # that beat arrives.
         #
         # Reading out the specific numbers makes sense for a line, the
         # corners, or the X -- it tells everyone exactly what happened.
@@ -1048,16 +1107,30 @@ class BingoGame(GridGameMixin, Game):
         # redundant: Blackout already means "the whole card," so naming
         # every number adds no information.
         if winning_numbers and self.options.pattern != PATTERN_BLACKOUT:
-            number_strings = [
-                f"{COLUMN_LETTERS[self._column_for_number(n)]} {n}"
-                for n in winning_numbers
-            ]
             self.broadcast_personal_l(
                 player,
                 "bingo-claim-correct-you",
                 "bingo-claim-correct",
                 buffer="game",
-                numbers=lambda locale: Localization.format_list_and(locale, number_strings),
+                # Each entry goes through the same per-locale Fluent key
+                # the "check called numbers" list uses, rather than a
+                # hardcoded f"{letter} {number}" -- the resolved locale
+                # only reaches this callback once per recipient (see
+                # GameCommunicationMixin._resolve_broadcast_kwargs), so
+                # the individual number strings have to be built here,
+                # not once up front.
+                numbers=lambda locale: Localization.format_list_and(
+                    locale,
+                    [
+                        Localization.get(
+                            locale,
+                            "bingo-status-called-entry",
+                            letter=COLUMN_LETTERS[self._column_for_number(n)],
+                            number=n,
+                        )
+                        for n in winning_numbers
+                    ],
+                ),
             )
         else:
             self.broadcast_personal_l(

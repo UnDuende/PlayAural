@@ -35,13 +35,19 @@ bingo-repeat-call = Repeat last number
 bingo-check-called = Check called numbers
 bingo-no-calls-yet = No numbers have been called yet.
 bingo-claim-in-progress = Another claim is currently being checked. Try again in a moment.
+bingo-claim-wait-for-call = Wait for the number being drawn to be announced, then try again.
 bingo-checking-claim-you = You call Bingo. Checking your card...
 bingo-checking-claim = { $player } calls Bingo. Checking the card...
 bingo-whose-turn-checking = Checking { $player }'s card...
 bingo-whose-turn-drawing = Drawing the next number...
-bingo-whose-turn-waiting = Next number in { $seconds } seconds.
+bingo-whose-turn-waiting = { $seconds ->
+    [one] Next number in { $seconds } second.
+   *[other] Next number in { $seconds } seconds.
+}
 bingo-claim-incorrect-you = Incorrect card.
 bingo-claim-incorrect = { $player }'s card is incorrect.
+bingo-claim-incomplete-you = You don't have the pattern yet.
+bingo-claim-incomplete = { $player } doesn't have the pattern yet.
 bingo-marked-number-not-called = You marked { $letter } { $number }, but it hasn't been called yet.
 
 bingo-last-call = { $letter } { $number }
@@ -49,7 +55,7 @@ bingo-last-call = { $letter } { $number }
 bingo-status-called-count = { $count } of { $total } numbers called.
 bingo-status-called-entry = { $letter } { $number }
 
-bingo-game-start = Bingo begins! Pattern: { $pattern }. A new number will be called every { $interval } seconds. Mark your card and press B when you have Bingo.
+bingo-game-start = Bingo begins! Pattern: { $pattern }. A new number will be called every { $interval } seconds. Mark your card and claim Bingo when you have it.
 bingo-number-called = { $letter } { $number }
 
 bingo-claim-correct-you = Yes! Correct card. You win with { $numbers }!
@@ -61,6 +67,9 @@ bingo-deck-exhausted = All 75 numbers have been called. The round ends here.
 bingo-error-invalid-interval = "{ $value }" is not a valid call interval.
 bingo-error-invalid-pattern = { $value } is not a recognized winning pattern.
 
-bingo-end-calls = { $count } numbers were called this round.
+bingo-end-calls = { $count ->
+    [one] { $count } number was called this round.
+   *[other] { $count } numbers were called this round.
+}
 bingo-end-winner-line = Winner: { $player }
-bingo-end-no-winner = No player completed the pattern.
+bingo-end-no-winner = No valid Bingo claim was made this round.

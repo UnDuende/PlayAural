@@ -35,6 +35,7 @@ bingo-repeat-call = Lặp lại số vừa đọc
 bingo-check-called = Xem các số đã đọc
 bingo-no-calls-yet = Chưa có số nào được đọc.
 bingo-claim-in-progress = Đang kiểm tra một yêu cầu Bingo khác. Hãy thử lại sau một chút.
+bingo-claim-wait-for-call = Hãy đợi số đang được rút được thông báo, rồi thử lại.
 bingo-checking-claim-you = Bạn hô Bingo. Đang kiểm tra thẻ của bạn...
 bingo-checking-claim = { $player } hô Bingo. Đang kiểm tra thẻ...
 bingo-whose-turn-checking = Đang kiểm tra thẻ của { $player }...
@@ -42,6 +43,8 @@ bingo-whose-turn-drawing = Đang rút số tiếp theo...
 bingo-whose-turn-waiting = Số tiếp theo sau { $seconds } giây.
 bingo-claim-incorrect-you = Thẻ không hợp lệ.
 bingo-claim-incorrect = Thẻ của { $player } không hợp lệ.
+bingo-claim-incomplete-you = Bạn chưa hoàn thành mẫu thắng.
+bingo-claim-incomplete = { $player } chưa hoàn thành mẫu thắng.
 bingo-marked-number-not-called = Bạn đã đánh dấu { $letter } { $number }, nhưng số đó chưa được đọc.
 
 bingo-last-call = { $letter } { $number }
@@ -49,7 +52,7 @@ bingo-last-call = { $letter } { $number }
 bingo-status-called-count = Đã đọc { $count } trên { $total } số.
 bingo-status-called-entry = { $letter } { $number }
 
-bingo-game-start = Bingo bắt đầu! Mẫu thắng: { $pattern }. Một số mới sẽ được đọc mỗi { $interval } giây. Đánh dấu thẻ của bạn và nhấn B khi có Bingo.
+bingo-game-start = Bingo bắt đầu! Mẫu thắng: { $pattern }. Một số mới sẽ được đọc mỗi { $interval } giây. Đánh dấu thẻ của bạn và hô Bingo khi có Bingo.
 bingo-number-called = { $letter } { $number }
 
 bingo-claim-correct-you = Đúng rồi! Thẻ hợp lệ. Bạn thắng với { $numbers }!
@@ -63,4 +66,4 @@ bingo-error-invalid-pattern = { $value } không phải là mẫu thắng hợp l
 
 bingo-end-calls = Đã đọc { $count } số trong vòng này.
 bingo-end-winner-line = Người thắng: { $player }
-bingo-end-no-winner = Không có người chơi nào hoàn thành mẫu thắng.
+bingo-end-no-winner = Không có yêu cầu Bingo hợp lệ nào được thực hiện trong vòng này.

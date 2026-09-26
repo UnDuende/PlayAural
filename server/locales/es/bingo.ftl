@@ -35,13 +35,19 @@ bingo-repeat-call = Repetir el último número
 bingo-check-called = Ver números cantados
 bingo-no-calls-yet = Todavía no se ha cantado ningún número.
 bingo-claim-in-progress = Se está verificando otro reclamo en este momento. Intenta de nuevo en un momento.
+bingo-claim-wait-for-call = Espera a que se anuncie el número que se está cantando, luego intenta de nuevo.
 bingo-checking-claim-you = Cantas Bingo. Verificando tu cartón...
 bingo-checking-claim = { $player } canta Bingo. Verificando el cartón...
 bingo-whose-turn-checking = Verificando el cartón de { $player }...
 bingo-whose-turn-drawing = Sacando el siguiente número...
-bingo-whose-turn-waiting = Próximo número en { $seconds } segundos.
+bingo-whose-turn-waiting = { $seconds ->
+    [one] Próximo número en { $seconds } segundo.
+   *[other] Próximo número en { $seconds } segundos.
+}
 bingo-claim-incorrect-you = Cartón incorrecto.
 bingo-claim-incorrect = El cartón de { $player } es incorrecto.
+bingo-claim-incomplete-you = Todavía no tienes el patrón completo.
+bingo-claim-incomplete = { $player } todavía no tiene el patrón completo.
 bingo-marked-number-not-called = Marcaste { $letter } { $number }, pero todavía no se ha cantado.
 
 bingo-last-call = { $letter } { $number }
@@ -49,7 +55,7 @@ bingo-last-call = { $letter } { $number }
 bingo-status-called-count = { $count } de { $total } números cantados.
 bingo-status-called-entry = { $letter } { $number }
 
-bingo-game-start = ¡Comienza el Bingo! Patrón: { $pattern }. Se cantará un número nuevo cada { $interval } segundos. Marca tu cartón y presiona B cuando tengas Bingo.
+bingo-game-start = ¡Comienza el Bingo! Patrón: { $pattern }. Se cantará un número nuevo cada { $interval } segundos. Marca tu cartón y canta Bingo cuando lo tengas.
 bingo-number-called = { $letter } { $number }
 
 bingo-claim-correct-you = ¡Sí! Cartón correcto. Ganas con { $numbers }!
@@ -61,6 +67,9 @@ bingo-deck-exhausted = Se cantaron los 75 números. La ronda termina aquí.
 bingo-error-invalid-interval = "{ $value }" no es un intervalo de canto válido.
 bingo-error-invalid-pattern = { $value } no es un patrón para ganar reconocido.
 
-bingo-end-calls = Se cantaron { $count } números en esta ronda.
+bingo-end-calls = { $count ->
+    [one] Se cantó { $count } número en esta ronda.
+   *[other] Se cantaron { $count } números en esta ronda.
+}
 bingo-end-winner-line = Ganador: { $player }
-bingo-end-no-winner = Ningún jugador completó el patrón.
+bingo-end-no-winner = No se realizó ningún reclamo de Bingo válido esta ronda.
